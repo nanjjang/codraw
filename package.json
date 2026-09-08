@@ -1,8 +1,8 @@
 {
   "name": "repogram",
   "displayName": "Repogram",
-  "description": "Visualize workspace architecture, reading paths, flows, interfaces, and data models without leaving VS Code.",
-  "version": "0.1.4",
+  "description": "Explore code structure, inspect change impact, find related tests, and review Git changes without leaving VS Code.",
+  "version": "0.1.5",
   "publisher": "nanjjang",
   "preview": true,
   "pricing": "Free",
@@ -35,7 +35,11 @@
     "mongodb",
     "nosql",
     "mongoose",
-    "visualization"
+    "visualization",
+    "change impact",
+    "developer tools",
+    "test navigation",
+    "code review"
   ],
   "main": "./dist/extension.js",
   "browser": "./dist/extension.js",
@@ -80,6 +84,35 @@
           "command": "repogram.open",
           "when": "view == repogram.overview",
           "group": "navigation"
+        },
+        {
+          "command": "repogram.reviewChanges",
+          "when": "view == repogram.overview",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "repogram.showFileImpact",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote",
+          "group": "8_repogram@0"
+        },
+        {
+          "command": "repogram.findRelatedTests",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote",
+          "group": "8_repogram@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "repogram.showFileImpact",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote",
+          "group": "8_repogram@0"
+        },
+        {
+          "command": "repogram.findRelatedTests",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote",
+          "group": "8_repogram@1"
         }
       ]
     },
@@ -101,6 +134,30 @@
         "title": "Repogram: Export Schema Documentation",
         "category": "Repogram",
         "icon": "$(export)"
+      },
+      {
+        "command": "repogram.showFileImpact",
+        "title": "Repogram: Show File Impact",
+        "category": "Repogram",
+        "icon": "$(references)"
+      },
+      {
+        "command": "repogram.reviewChanges",
+        "title": "Repogram: Review Working Changes",
+        "category": "Repogram",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "repogram.findRelatedTests",
+        "title": "Repogram: Find Related Tests",
+        "category": "Repogram",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "repogram.copyChangeReview",
+        "title": "Repogram: Copy Change Review",
+        "category": "Repogram",
+        "icon": "$(copy)"
       }
     ],
     "configuration": {

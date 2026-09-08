@@ -30,6 +30,17 @@ test('collapsed details uses a compact bottom rail in the narrow stacked layout'
     /height:\s*var\(--repogram-details-collapsed-size\)/);
 });
 
+test('the sidebar HTML contains every element required by the work, connection and review views', () => {
+  const script = readFileSync('webview-src/overview.ts', 'utf8');
+  const host = readFileSync('src/overviewView.ts', 'utf8');
+  const requiredIds = [...script.matchAll(/findElement<[^>]+>\('([^']+)'\)/g)].map((match) => match[1]);
+  assert.ok(requiredIds.includes('ov-work-view'));
+  for (const id of requiredIds) {
+    assert.ok(id);
+    assert.match(host, new RegExp(`id=["']${escapeRegExp(id)}["']`), `sidebar HTML is missing #${id}`);
+  }
+});
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

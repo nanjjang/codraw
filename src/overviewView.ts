@@ -4,12 +4,15 @@ import type { ProjectSnapshot } from './model';
 import { RepogramPanel } from './panel';
 import { iconSprite } from './icons';
 import { bundleUri, contentSecurityPolicy, createNonce, webviewOptionsFor } from './webviewHtml';
+import { copyDevelopmentReview, dirtyWorkspacePaths, openDevelopmentSource, type DevelopmentScope } from './developmentActions';
 
 type OverviewMessage =
   | { type: 'ready' }
   | { type: 'refresh' }
   | { type: 'rendered'; revision: number }
   | { type: 'openSource'; nodeId: string }
+  | { type: 'openDevelopmentSource'; path: string; line?: number }
+  | { type: 'copyDevelopmentReview'; scope: DevelopmentScope; path?: string }
   | { type: 'openDiagram'; nodeId?: string };
 
 /**
@@ -23,13 +26,37 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'repogram.overview';
 
   private view: vscode.WebviewView | undefined;
+  private ready = false;
+  private renderedRevision: number | undefined;
+  private pendingFocus: { scope: DevelopmentScope; path?: string } | undefined;
+  private developmentStateKey = '';
 
   constructor(private readonly repogram: RepogramContext) {}
 
+  get renderReady(): boolean {
+    return Boolean(this.repogram.service.snapshot && this.renderedRevision === this.repogram.service.snapshot.revision);
+  }
+
+  async revealDevelopment(scope: DevelopmentScope, path?: string): Promise<void> {
+    this.pendingFocus = { scope, ...(path ? { path } : {}) };
+    await vscode.commands.executeCommand('repogram.overview.focus');
+    await this.postFocus();
+  }
+
+  private async postFocus(): Promise<void> {
+    if (this.ready && this.pendingFocus && this.view) {
+      const focus = this.pendingFocus;
+      if (await this.view.webview.postMessage({ type: 'focusDevelopment', ...focus })) {
+        this.pendingFocus = undefined;
+      }
+    }
+  }
+
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    this.ready = false;
+    this.developmentStateKey = '';
     view.webview.options = webviewOptionsFor(this.repogram.extension);
-    view.webview.html = this.getHtml(view.webview);
 
     // Moving the view between containers disposes and resolves it again, so the
     // subscriptions belong to this resolution rather than to the extension.
@@ -40,6 +67,11 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
       undefined,
       disposables,
     );
+
+    this.repogram.changes.onDidChange(() => { void this.postDevelopmentState(); }, undefined, disposables);
+    vscode.workspace.onDidChangeTextDocument(() => { void this.postDevelopmentState(); }, undefined, disposables);
+    vscode.workspace.onDidSaveTextDocument(() => { void this.postDevelopmentState(); }, undefined, disposables);
+    vscode.workspace.onDidCloseTextDocument(() => { void this.postDevelopmentState(); }, undefined, disposables);
 
     this.repogram.tracker.onDidChange(
       (active) => {
@@ -57,11 +89,12 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
           void this.post(event.snapshot);
         } else if (event.type === 'error') {
           void view.webview.postMessage({ type: 'analysisError', message: event.message });
-        } else if (view.visible) {
+        } else if (view.visible && vscode.workspace.getConfiguration('repogram').get<boolean>('autoRefresh', true)) {
           void this.repogram.service.refresh();
         } else {
           void view.webview.postMessage({ type: 'analysisStale' });
         }
+        void this.postDevelopmentState();
       },
       undefined,
       disposables,
@@ -72,6 +105,9 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
         const snapshot = this.repogram.service.snapshot;
         if (view.visible && snapshot) {
           void this.post(snapshot);
+          if (this.repogram.service.isStale && vscode.workspace.getConfiguration('repogram').get<boolean>('autoRefresh', true)) {
+            void this.repogram.service.refresh();
+          }
         }
       },
       undefined,
@@ -84,11 +120,15 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
       }
       if (this.view === view) {
         this.view = undefined;
+        this.ready = false;
+        this.renderedRevision = undefined;
       }
     });
 
     // Opening the container is the request; nothing else has to ask for it.
+    view.webview.html = this.getHtml(view.webview);
     void this.repogram.service.ensure();
+    void this.repogram.changes.refresh();
   }
 
   private async post(snapshot: ProjectSnapshot): Promise<void> {
@@ -98,6 +138,19 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
       snapshot,
       active: this.repogram.tracker.current ?? null,
     });
+    await this.postDevelopmentState();
+  }
+
+  private async postDevelopmentState(): Promise<void> {
+    const state = {
+      type: 'developmentState',
+      changes: this.repogram.changes.current,
+      dirtyPaths: dirtyWorkspacePaths(),
+      stale: this.repogram.service.isStale,
+    };
+    const key = JSON.stringify(state);
+    if (key === this.developmentStateKey || !this.ready) return;
+    if (await this.view?.webview.postMessage(state)) this.developmentStateKey = key;
   }
 
   private handleMessage(value: unknown): void {
@@ -106,14 +159,24 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (message.type === 'ready') {
+      this.ready = true;
       const snapshot = this.repogram.service.snapshot;
       if (snapshot) {
         void this.post(snapshot);
       } else {
         void this.repogram.service.ensure();
       }
+      void this.postDevelopmentState();
+      void this.postFocus();
     } else if (message.type === 'refresh') {
       void this.repogram.service.refresh();
+      void this.repogram.changes.refresh();
+    } else if (message.type === 'rendered') {
+      this.renderedRevision = message.revision;
+    } else if (message.type === 'openDevelopmentSource') {
+      void openDevelopmentSource(this.repogram, message.path, message.line);
+    } else if (message.type === 'copyDevelopmentReview') {
+      void copyDevelopmentReview(this.repogram, message.scope, message.path);
     } else if (message.type === 'openSource') {
       void this.repogram.service.openSource(message.nodeId);
     } else if (message.type === 'openDiagram') {
@@ -152,10 +215,12 @@ export class RepogramOverviewProvider implements vscode.WebviewViewProvider {
       <div id="ov-summary" class="ov-summary">Preparing workspace analysis…</div>
     </header>
     <nav class="ov-tabs" role="tablist" aria-label="Sidebar tool">
+      <button id="ov-tab-work" class="ov-tab" type="button" role="tab" aria-controls="ov-work-view" data-view="work">Work</button>
       <button id="ov-tab-map" class="ov-tab" type="button" role="tab" data-view="map">Connections</button>
       <button id="ov-tab-checks" class="ov-tab" type="button" role="tab" data-view="checks">Review <span id="ov-check-count" class="ov-tab-count"></span></button>
     </nav>
     <main id="ov-content" class="ov-content">
+      <section id="ov-work-view" class="ov-view" role="tabpanel" aria-labelledby="ov-tab-work"></section>
       <section id="ov-map-view" class="ov-view" role="tabpanel" aria-labelledby="ov-tab-map">
         <div id="ov-current" class="ov-current"></div>
         <div class="ov-map-toolbar">
@@ -203,6 +268,16 @@ function parseOverviewMessage(value: unknown): OverviewMessage | undefined {
   }
   if (candidate.type === 'openSource' && typeof candidate.nodeId === 'string' && candidate.nodeId.length < 1000) {
     return { type: 'openSource', nodeId: candidate.nodeId };
+  }
+  if (candidate.type === 'openDevelopmentSource' && typeof candidate.path === 'string' && candidate.path.length < 4096) {
+    if (candidate.line !== undefined && (typeof candidate.line !== 'number' || !Number.isSafeInteger(candidate.line) || candidate.line < 1)) return undefined;
+    return { type: 'openDevelopmentSource', path: candidate.path, ...(typeof candidate.line === 'number' ? { line: candidate.line } : {}) };
+  }
+  if (candidate.type === 'copyDevelopmentReview' && (candidate.scope === 'file' || candidate.scope === 'changes')) {
+    if (candidate.path !== undefined && (typeof candidate.path !== 'string' || candidate.path.length >= 4096)) {
+      return undefined;
+    }
+    return { type: 'copyDevelopmentReview', scope: candidate.scope, ...(typeof candidate.path === 'string' ? { path: candidate.path } : {}) };
   }
   if (candidate.type === 'openDiagram') {
     return typeof candidate.nodeId === 'string' && candidate.nodeId.length < 1000

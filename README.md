@@ -5,7 +5,7 @@
 <h1 align="center">Repogram</h1>
 
 <p align="center">
-  Understand an unfamiliar codebase without leaving VS Code.
+  Understand the codebase and review your next change without leaving VS Code.
 </p>
 
 <p align="center">
@@ -14,6 +14,8 @@
 </p>
 
 Repogram reads the workspace you already have open and turns its static structure into practical maps: how modules depend on one another, where to start reading, how calls and branches flow, which interfaces the project exposes, and how its relational or document data models fit together.
+
+The **Work** sidebar adds a development workflow: inspect the current file’s import impact, find related tests, and review Git working changes with source-backed evidence.
 
 It is designed to stay beside your editor. As you move through the code, Repogram follows the active file and keeps the relevant module and its immediate neighborhood in view.
 
@@ -24,6 +26,7 @@ It is designed to stay beside your editor. As you move through the code, Repogra
 
 Most codebase diagrams are snapshots: generate one, look at it once, then watch it drift out of date. Repogram instead works as a live reading companion inside VS Code.
 
+- **Review a change while you make it.** See direct and indirect importers, inspect an import chain, jump to related tests, and copy Markdown review notes.
 - **Start with the part that matters.** Repogram highlights entry points, dependency hotspots, large source files, apparently unreferenced files, and files without a correspondingly named test.
 - **Move from context to detail.** Begin with a repository or subject-area map, then drill down to modules, services, files, tables, or collections.
 - **Keep the evidence close.** Select a node to inspect why it exists; open the source directly from the diagram when you need to verify it.
@@ -36,8 +39,8 @@ Once Repogram is installed, open your first map:
 
 1. Open a project folder or multi-root workspace in VS Code.
 2. Select the **Repogram** icon in the Activity Bar.
-3. Use the sidebar overview immediately, or select **Open diagram** for the full canvas.
-4. Open a source file. Repogram will center the relevant module and mark the active file.
+3. Open a source file. The **Work → Current file** tab shows dependencies, potential impact, and related tests.
+4. Switch to **Git changes** to inspect the current working set, **Connections** for the module map, or **Open diagram** for the full canvas.
 
 There is no project setup or configuration required. You can also open the canvas with **Repogram: Open Workspace Diagram** from the Command Palette.
 
@@ -45,7 +48,7 @@ There is no project setup or configuration required. You can also open the canva
 
 ### Sidebar overview
 
-The sidebar is for orientation while you read code. It shows the module containing the active file, the modules that use it, the modules it uses, and a compact summary of the current selection. Search narrows the map without replacing VS Code's Explorer.
+The sidebar opens on **Work**, a development aid described below. **Connections** shows the module containing the active file, the modules that use it, the modules it uses, and a compact summary of the current selection. Search narrows the map without replacing VS Code's Explorer.
 
 The **Review** tab collects results that deserve a human check, including unresolved syntax, inferred or unresolved relationships, and isolated nodes. Each item explains why it was flagged and opens its source when a location is available.
 
@@ -54,6 +57,34 @@ The **Review** tab collects results that deserve a human check, including unreso
 The editor panel is the complete, zoomable workspace canvas. Use it to change perspectives, move between scope levels, inspect declarations, and open the source behind a node. Opening the panel does not steal focus from the editor.
 
 Both views share one analysis snapshot, so the workspace is scanned only once.
+
+## Work — develop with the surrounding code in view
+
+### Inspect a file before changing it
+
+Open **Work → Current file**, or right-click a file in the editor or Explorer and choose **Repogram: Show File Impact**.
+
+- **Directly affected** lists indexed files that import the selection.
+- **Indirectly affected** follows importers through multiple steps. Expand **Why affected** to inspect the shortest import chain, then select an evidence link to open its import declaration.
+- **Depends on** lists local dependencies used by the selection.
+- **Related tests** separates tests connected through imports from **File name match · heuristic** suggestions. A name match is only a candidate to inspect; neither result measures coverage or runs tests.
+- **Pin file** keeps a file as the review target while you open its callers or tests. **Follow editor** resumes following the editor when `repogram.followActiveEditor` is enabled.
+
+You can also run **Repogram: Find Related Tests** from the Command Palette or a file’s context menu to choose and open a test without scrolling the sidebar.
+
+### Review your working changes
+
+Choose **Work → Git changes**, or run **Repogram: Review Working Changes**. The list merges staged, working-tree, and untracked files, preserving rename origins, deletions, and conflicts. Filter the file list, open a source file, or select **Inspect impact** for an individual change. The impact sections summarize the combined working set.
+
+Git status comes from VS Code’s built-in Git extension. It requires a trusted workspace and an enabled Git extension; **Current file** remains useful when Git is unavailable. Repogram never stages, commits, pushes, or modifies Git state.
+
+**Copy review notes** copies a Markdown summary of the selection, potential impact, related tests, and analysis limits. **Repogram: Copy Change Review** copies the whole working set’s review from the Command Palette. Notes contain file paths and analysis metadata, not source-file contents, and are only copied when you request them.
+
+### Know which version you are reviewing
+
+Impact is computed from **saved working-tree files**, including unstaged edits. It is not a staged-diff analysis, comparison with a base branch, or Git history analysis. Unsaved editor content is flagged separately. Save edits and refresh to update the analysis; when auto-refresh is disabled or the workspace changes while the view is hidden, a stale notice identifies the old snapshot.
+
+Deleted or renamed-away files, excluded files, unsupported languages, unresolved aliases, generated code, and dynamic usage can leave gaps. **Outside the analysis** keeps those paths visible; an empty impact list never proves that a change is safe. Test suggestions are limited to scanned files and naming conventions, with filename matches kept within the same detected project.
 
 ## Five perspectives
 

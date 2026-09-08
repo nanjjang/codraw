@@ -7,6 +7,15 @@ export interface SourceRef {
   line: number;
 }
 
+/** A statically resolved workspace import: `from` imports `to`. */
+export interface FileDependency {
+  from: string;
+  to: string;
+  /** First import declaration in `from` that resolves to `to`, one-based. */
+  line: number;
+  confidence: ResolutionConfidence;
+}
+
 export interface DiagramNode {
   id: string;
   kind: string;
@@ -226,6 +235,8 @@ export interface ProjectSnapshot {
   stats: AnalysisStats;
   architecture: DiagramGraph;
   structure: StructureNode;
+  /** File-level imports, including files in the same architecture module. */
+  fileDependencies?: FileDependency[];
   flow: FlowCatalog;
   database: DiagramGraph;
   interfaces: InterfaceCatalog;

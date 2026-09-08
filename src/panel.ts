@@ -125,7 +125,7 @@ export class RepogramPanel implements vscode.Disposable {
           void this.post(event.snapshot);
         } else if (event.type === 'error') {
           void this.panel.webview.postMessage({ type: 'analysisError', message: event.message });
-        } else if (this.panel.visible) {
+        } else if (this.panel.visible && vscode.workspace.getConfiguration('repogram').get<boolean>('autoRefresh', true)) {
           void this.refresh();
         } else {
           void this.panel.webview.postMessage({ type: 'analysisStale' });
@@ -140,6 +140,9 @@ export class RepogramPanel implements vscode.Disposable {
         const snapshot = this.repogram.service.snapshot;
         if (webviewPanel.visible && snapshot) {
           void this.post(snapshot);
+          if (this.repogram.service.isStale && vscode.workspace.getConfiguration('repogram').get<boolean>('autoRefresh', true)) {
+            void this.refresh();
+          }
         }
       },
       undefined,

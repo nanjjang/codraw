@@ -1,3 +1,6 @@
+import './overview.css';
+import { DevelopmentView } from './development';
+import type { WorkingChangesState } from '../src/workingChanges';
 import {
   chooseSidebarFocus,
   graphHealth,
@@ -29,7 +32,7 @@ interface VsCodeApi<State> {
 
 declare function acquireVsCodeApi<State>(): VsCodeApi<State>;
 
-type ToolView = 'map' | 'checks';
+type ToolView = 'work' | 'map' | 'checks';
 
 interface PersistedState {
   view?: ToolView;
@@ -45,10 +48,15 @@ interface ActiveContext {
 }
 
 interface HostMessage {
-  type: 'analysisStarted' | 'analysisStale' | 'analysisError' | 'snapshot' | 'activeContext';
+  type: 'analysisStarted' | 'analysisStale' | 'analysisError' | 'snapshot' | 'activeContext' | 'developmentState' | 'focusDevelopment';
   message?: string;
   snapshot?: ProjectSnapshot;
   active?: ActiveContext | null;
+  changes?: WorkingChangesState;
+  dirtyPaths?: string[];
+  stale?: boolean;
+  scope?: 'file' | 'changes';
+  path?: string;
 }
 
 const SUPPORTED_SCHEMA_VERSION: number = 1;
@@ -64,6 +72,8 @@ const summaryLabel = findElement<HTMLElement>('ov-summary');
 const openButton = findElement<HTMLButtonElement>('ov-open');
 const refreshButton = findElement<HTMLButtonElement>('ov-refresh');
 const mapTab = findElement<HTMLButtonElement>('ov-tab-map');
+const workTab = findElement<HTMLButtonElement>('ov-tab-work');
+const workView = findElement<HTMLElement>('ov-work-view');
 const checksTab = findElement<HTMLButtonElement>('ov-tab-checks');
 const checkCount = findElement<HTMLElement>('ov-check-count');
 const mapView = findElement<HTMLElement>('ov-map-view');
@@ -81,7 +91,11 @@ const stateView = findElement<HTMLElement>('ov-state');
 
 let snapshot: ProjectSnapshot | undefined;
 let active: ActiveContext | undefined;
-let view: ToolView = isToolView(saved.view) ? saved.view : 'map';
+let view: ToolView = isToolView(saved.view) ? saved.view : 'work';
+let changes: WorkingChangesState = { status: 'loading', changes: [] };
+let dirtyPaths: string[] = [];
+let stale = false;
+const development = new DevelopmentView(workView, (message) => vscode.postMessage(message));
 let area: SidebarArea = isSidebarArea(saved.area) ? saved.area : 'code';
 let following = saved.following ?? true;
 const focus: Partial<Record<SidebarArea, string>> = { ...saved.focus };
@@ -95,6 +109,21 @@ function wireEvents(): void {
   openButton.addEventListener('click', () => openFullDiagram());
   mapTab.addEventListener('click', () => setView('map'));
   checksTab.addEventListener('click', () => setView('checks'));
+  workTab.addEventListener('click', () => setView('work'));
+  const tabs = [workTab, mapTab, checksTab];
+  const views: ToolView[] = ['work', 'map', 'checks'];
+  for (const [index, tab] of tabs.entries()) {
+    tab.addEventListener('keydown', (event) => {
+      const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+      if (next >= 0 && views[next]) {
+        event.preventDefault();
+        setView(views[next]);
+        tabs[next]?.focus();
+      }
+    });
+  }
   codeButton.addEventListener('click', () => setArea('code'));
   dataButton.addEventListener('click', () => setArea('data'));
   followButton.addEventListener('click', () => {
@@ -132,16 +161,30 @@ function wireEvents(): void {
       return;
     }
     if (message.type === 'analysisStarted') {
+      stale = true;
+      renderDevelopment();
       refreshButton.disabled = true;
       if (!snapshot) {
         showState('Analyzing workspace…');
       }
     } else if (message.type === 'analysisStale') {
+      stale = true;
+      renderDevelopment();
       refreshButton.classList.add('needs-attention');
       refreshButton.title = 'The workspace changed. Re-analyze.';
     } else if (message.type === 'analysisError') {
+      stale = true;
+      renderDevelopment();
       refreshButton.disabled = false;
       showState(message.message ?? 'Workspace analysis failed.');
+    } else if (message.type === 'developmentState') {
+      changes = message.changes ?? changes;
+      dirtyPaths = message.dirtyPaths ?? dirtyPaths;
+      stale = message.stale ?? stale;
+      renderDevelopment();
+    } else if (message.type === 'focusDevelopment') {
+      setView('work');
+      development.focus(message.scope ?? 'file', message.path);
     } else if (message.type === 'activeContext') {
       active = message.active ?? undefined;
       if (following && active) {
@@ -155,6 +198,7 @@ function wireEvents(): void {
         return;
       }
       snapshot = message.snapshot;
+      stale = false;
       active = message.active === undefined ? active : message.active ?? undefined;
       if (following && active) {
         focus.code = active.moduleNodeId;
@@ -188,6 +232,7 @@ function setArea(next: SidebarArea): void {
 
 function render(): void {
   renderShell();
+  renderDevelopment();
   if (!snapshot) {
     return;
   }
@@ -200,13 +245,14 @@ function render(): void {
 }
 
 function renderShell(): void {
-  const mapSelected = view === 'map';
-  mapTab.setAttribute('aria-selected', String(mapSelected));
-  checksTab.setAttribute('aria-selected', String(!mapSelected));
-  mapTab.tabIndex = mapSelected ? 0 : -1;
-  checksTab.tabIndex = mapSelected ? -1 : 0;
-  mapView.hidden = !mapSelected;
-  checksView.hidden = mapSelected;
+  for (const [name, tab, content] of [
+    ['work', workTab, workView], ['map', mapTab, mapView], ['checks', checksTab, checksView],
+  ] as const) {
+    const selected = view === name;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    content.hidden = !selected;
+  }
 
   codeButton.setAttribute('aria-pressed', String(area === 'code'));
   dataButton.setAttribute('aria-pressed', String(area === 'data'));
@@ -217,6 +263,10 @@ function renderShell(): void {
     ? 'Data entities are selected manually.'
     : following ? 'The center changes with the active editor. Click to keep this module centered.' : 'This module stays centered. Click to follow the active editor.';
   searchInput.placeholder = area === 'code' ? 'Find a module' : 'Find an entity';
+}
+
+function renderDevelopment(): void {
+  development.update(snapshot, active?.path, changes, dirtyPaths, stale);
 }
 
 function renderCurrentContext(): void {
@@ -717,7 +767,7 @@ function findElement<ElementType extends HTMLElement>(id: string): ElementType {
 }
 
 function isToolView(value: unknown): value is ToolView {
-  return value === 'map' || value === 'checks';
+  return value === 'work' || value === 'map' || value === 'checks';
 }
 
 function isSidebarArea(value: unknown): value is SidebarArea {
@@ -729,7 +779,7 @@ function parseHostMessage(value: unknown): HostMessage | undefined {
     return undefined;
   }
   const candidate = value as Record<string, unknown>;
-  if (!['analysisStarted', 'analysisStale', 'analysisError', 'snapshot', 'activeContext'].includes(String(candidate.type))) {
+  if (!['analysisStarted', 'analysisStale', 'analysisError', 'snapshot', 'activeContext', 'developmentState', 'focusDevelopment'].includes(String(candidate.type))) {
     return undefined;
   }
   return candidate as unknown as HostMessage;

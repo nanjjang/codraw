@@ -114,3 +114,16 @@ npm run check:full
 4. 데이터베이스 선언이 없는 프로젝트에서 빈 상태가 자연스럽게 표시되는지
 5. 파일 변경과 수동 Refresh가 최신 결과를 반영하는지
 6. 큰 워크스페이스에서 제외 및 제한 설정이 적용되는지
+
+
+## Work 탭의 데이터 경계
+
+`ProjectSnapshot.fileDependencies`는 모듈로 합치기 전의 파일 import 관계를 보존합니다. `developmentModel.ts`는 역방향 BFS로 여러 변경 파일의 직접·간접 영향과 최단 근거 경로를 계산합니다. 근거 경로는 펼칠 때 구성하여 긴 체인의 메모리 사용량을 제한합니다.
+
+`workingChanges.ts`는 내장 `vscode.git`의 공개 API를 통해 읽기 전용 상태를 구독합니다. Git 비활성화, workspace trust, 저장소 추가·제거, 여러 workspace folder, rename·conflict 상태를 처리합니다. Node 전용 API와 Git 셸 호출을 번들에 추가하지 않습니다.
+
+`developmentActions.ts`가 파일 열기, 테스트 Quick Pick, 클립보드 복사를 담당하고 `developmentReport.ts`가 소스 본문 없는 Markdown 검토 메모를 생성합니다. Webview가 요청한 파일은 분석된 경로 또는 Git 변경 목록에 있는 실제 작업공간 경로인지 검증합니다.
+
+Work 탭 수동 검증: 현재 파일 변경 → Pin file → 영향 파일 열기 → import 근거 펼치기 → 관련 테스트 열기 → Git changes 필터와 개별 영향 탐색 → Copy review notes를 확인합니다. 저장하지 않은 편집, 자동 갱신 비활성화 후 저장, Git 비활성화와 삭제 파일의 안내도 확인합니다. 복사한 메모에 저장된 작업 트리 기준과 테스트 미실행 한계가 포함되어야 합니다.
+
+현재 미출시 개발본은 버전 번호를 유지합니다. 로컬 재설치 검증과 Marketplace 퍼블리시는 별개이며, 커밋·푸시·새 버전 퍼블리시는 사용자 승인 후 진행합니다.

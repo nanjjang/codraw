@@ -9,6 +9,7 @@ import type {
   DiagramNode,
   ProjectSnapshot,
   FileRole,
+  FileDependency,
   StructureNode,
   WorkspaceFile,
 } from './model';
@@ -137,6 +138,7 @@ interface ArchitectureResult {
    * file nothing reaches — so it is kept on the way past rather than recomputed.
    */
   fileImports: Map<string, Set<string>>;
+  fileDependencies: FileDependency[];
 }
 
 export function isTextAnalysisPath(filePath: string): boolean {
@@ -194,6 +196,7 @@ export function analyzeWorkspace(files: WorkspaceFile[], options: AnalyzeOptions
     },
     architecture: architecture.graph,
     structure,
+    fileDependencies: architecture.fileDependencies,
     flow: flow.catalog,
     database: database.graph,
     interfaces: interfaces.catalog,
@@ -221,6 +224,7 @@ function analyzeArchitecture(files: WorkspaceFile[]): ArchitectureResult {
   const edgeCounts = new Map<string, { from: string; to: string; count: number; sources: string[]; line: number }>();
   const externalCounts = new Map<string, ExternalDependency>();
   const fileImports = new Map<string, Set<string>>();
+  const fileDependencies = new Map<string, FileDependency>();
   let unresolvedLocalImports = 0;
 
   for (const file of codeFiles) {
@@ -232,10 +236,22 @@ function analyzeArchitecture(files: WorkspaceFile[]): ArchitectureResult {
         const reached = fileImports.get(normalizePath(file.path)) ?? new Set<string>();
         for (const target of targets) {
           const normalized = normalizePath(target);
-          // A file importing a sibling of its own is still a self-reference at
-          // this level; counting it would make every barrel file look load-bearing.
+          // Keep sibling imports even when the module graph collapses them;
+          // only importing the very same file is a self-reference here.
           if (normalized !== normalizePath(file.path)) {
             reached.add(normalized);
+            const from = normalizePath(file.path);
+            const key = `${from}\u0000${normalized}`;
+            if (!fileDependencies.has(key)) {
+              fileDependencies.set(key, {
+                from,
+                to: normalized,
+                line: imported.line,
+                // Resolution uses source paths and language conventions, not
+                // a compiler or the project's runtime/module configuration.
+                confidence: 'inferred',
+              });
+            }
           }
         }
         fileImports.set(normalizePath(file.path), reached);
@@ -380,6 +396,8 @@ function analyzeArchitecture(files: WorkspaceFile[]): ArchitectureResult {
     diagnostics,
     moduleByPath,
     fileImports,
+    fileDependencies: [...fileDependencies.values()].sort((left, right) =>
+      left.from.localeCompare(right.from) || left.to.localeCompare(right.to)),
   };
 }
 
@@ -591,7 +609,7 @@ function extractImports(file: WorkspaceFile): ImportFact[] {
       if (!specifier) {
         continue;
       }
-      const line = lineAt(masked, match.index ?? 0);
+      const line = importLineAt(masked, match);
       const key = `${specifier}\u0000${line}`;
       if (!seen.has(key)) {
         facts.push({ specifier, line });
@@ -617,7 +635,7 @@ function extractImports(file: WorkspaceFile): ImportFact[] {
       for (const item of imports) {
         const specifier = item.trim().split(/\s+as\s+/)[0];
         if (specifier) {
-          facts.push({ specifier, line: lineAt(file.content, match.index ?? 0) });
+          facts.push({ specifier, line: importLineAt(file.content, match) });
         }
       }
     }
@@ -630,7 +648,7 @@ function extractImports(file: WorkspaceFile): ImportFact[] {
     for (const match of file.content.matchAll(/(?:^|\n)\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/g)) {
       const name = match[1];
       if (name) {
-        facts.push({ specifier: `self::${name}`, line: lineAt(file.content, match.index ?? 0) });
+        facts.push({ specifier: `self::${name}`, line: importLineAt(file.content, match) });
       }
     }
     addMatches(/(?:^|\n)\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+((?:crate|self|super)(?:::[\w*{}, ]+)*)\s*(?:as\s+\w+\s*)?;/g);
@@ -646,7 +664,7 @@ function extractImports(file: WorkspaceFile): ImportFact[] {
       const target = match[1];
       if (target) {
         // Normalized to a relative specifier so it resolves like every other one.
-        facts.push({ specifier: target.startsWith('.') ? target : `./${target}`, line: lineAt(file.content, match.index ?? 0) });
+        facts.push({ specifier: target.startsWith('.') ? target : `./${target}`, line: importLineAt(file.content, match) });
       }
     }
     addMatches(/(?:^|\n)\s*require\s+['"]([^'"]+)['"]/g);
@@ -659,7 +677,7 @@ function extractImports(file: WorkspaceFile): ImportFact[] {
       if (target) {
         facts.push({
           specifier: target.startsWith('.') ? target : `./${target}`,
-          line: lineAt(file.content, match.index ?? 0),
+          line: importLineAt(file.content, match),
         });
       }
     }
@@ -677,7 +695,8 @@ function extractImports(file: WorkspaceFile): ImportFact[] {
       for (const entry of body.matchAll(/(?:\w+\s+)?["`]([^"`]+)["`]/g)) {
         const specifier = entry[1];
         if (specifier) {
-          facts.push({ specifier, line: lineAt(file.content, block.index ?? 0) });
+          const bodyOffset = (block.index ?? 0) + block[0].indexOf('(') + 1;
+          facts.push({ specifier, line: lineAt(file.content, bodyOffset + (entry.index ?? 0)) });
         }
       }
     }
@@ -708,7 +727,15 @@ function resolveImportTargets(
     } else if (specifier.startsWith('~/')) {
       base = joinPath(workspacePrefix(sourceFile.path), specifier.slice(2));
     }
-    return listed(base ? resolveFileCandidate(base, fileIndex) : undefined);
+    if (!base) return [];
+    const resolved = resolveFileCandidate(base, fileIndex);
+    if (resolved) return [resolved];
+    // TypeScript projects commonly name the emitted .js file in source imports.
+    // When that file is absent, retain the source counterpart as an inference.
+    const sourceBase = normalizePath(base).replace(/\.(?:js|jsx)$/, '');
+    return listed(sourceBase !== normalizePath(base)
+      ? [`${sourceBase}.ts`, `${sourceBase}.tsx`].find((candidate) => fileIndex.has(candidate))
+      : undefined);
   }
 
   if (extension === 'py') {
@@ -1585,6 +1612,11 @@ function normalizePath(filePath: string): string {
 
 function lineAt(content: string, index: number): number {
   return content.slice(0, index).split('\n').length;
+}
+
+/** Import regexes consume preceding newlines; navigate to the declaration. */
+function importLineAt(content: string, match: RegExpMatchArray): number {
+  return lineAt(content, (match.index ?? 0) + (match[0].match(/^\s*/)?.[0].length ?? 0));
 }
 
 function moduleId(moduleName: string): string {

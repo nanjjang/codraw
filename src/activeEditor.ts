@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { isTextAnalysisPath, moduleNodeIdForPath, structureNodeIdForPath } from './analyzer';
+import { workspacePath } from './workspacePaths';
 
 /** Where the editor currently is, expressed in the diagram's own identifiers. */
 export interface ActiveContext {
@@ -71,16 +72,22 @@ export class ActiveEditorTracker implements vscode.Disposable {
   }
 
   private contextFor(editor: vscode.TextEditor | undefined): ActiveContext | undefined {
-    if (!editor || !vscode.workspace.getConfiguration('repogram').get<boolean>('followActiveEditor', true)) {
+    if (!vscode.workspace.getConfiguration('repogram').get<boolean>('followActiveEditor', true)) {
       return undefined;
+    }
+    // A diagram or sidebar can receive focus while the source editor remains
+    // visible. Keep that source as the working context instead of emptying it.
+    if (!editor) {
+      const visible = vscode.window.visibleTextEditors.find((candidate) => workspacePath(candidate.document.uri) === this.latest?.path);
+      return visible ? this.contextFor(visible) : undefined;
     }
     const uri = editor.document.uri;
     // Output channels, diff views and settings editors are text editors too.
     if (!vscode.workspace.getWorkspaceFolder(uri)) {
       return undefined;
     }
-    const path = vscode.workspace.asRelativePath(uri, false).replaceAll('\\', '/');
-    if (!isTextAnalysisPath(path)) {
+    const path = workspacePath(uri);
+    if (!path || !isTextAnalysisPath(path)) {
       return undefined;
     }
     return {
@@ -90,5 +97,3 @@ export class ActiveEditorTracker implements vscode.Disposable {
     };
   }
 }
-
-

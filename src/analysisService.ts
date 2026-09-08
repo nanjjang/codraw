@@ -27,6 +27,8 @@ export class AnalysisService implements vscode.Disposable {
   private requestSequence = 0;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
+  private stale = false;
+  private workspaceGeneration = 0;
 
   readonly onDidChange = this.emitter.event;
 
@@ -36,6 +38,8 @@ export class AnalysisService implements vscode.Disposable {
       if (!this.affectsAnalysis(uri)) {
         return;
       }
+      this.stale = true;
+      this.workspaceGeneration += 1;
       if (this.refreshTimer) {
         clearTimeout(this.refreshTimer);
       }
@@ -50,15 +54,32 @@ export class AnalysisService implements vscode.Disposable {
     watcher.onDidChange(handleChange, undefined, this.disposables);
     watcher.onDidDelete(handleChange, undefined, this.disposables);
     this.disposables.push(watcher, this.emitter);
+    const invalidate = (): void => {
+      this.stale = true;
+      this.workspaceGeneration += 1;
+      this.emitter.fire({ type: 'stale' });
+    };
+    this.disposables.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(invalidate),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (['repogram.exclude', 'repogram.maxFiles', 'repogram.maxFileSizeKb'].some((key) => event.affectsConfiguration(key))) {
+          invalidate();
+        }
+      }),
+    );
   }
 
   get snapshot(): ProjectSnapshot | undefined {
     return this.latest;
   }
 
+  get isStale(): boolean {
+    return this.stale;
+  }
+
   /** Analyzes once. A snapshot that already exists is reused as it is. */
   async ensure(): Promise<ProjectSnapshot | undefined> {
-    if (this.latest) {
+    if (this.latest && !this.stale) {
       return this.latest;
     }
     return this.refresh();
@@ -85,6 +106,8 @@ export class AnalysisService implements vscode.Disposable {
 
   private async analyze(): Promise<ProjectSnapshot | undefined> {
     const requestId = ++this.requestSequence;
+    const generation = this.workspaceGeneration;
+    this.stale = true;
     this.emitter.fire({ type: 'started', requestId });
     try {
       // Both halves stay inside one progress scope: parsing is the expensive,
@@ -112,17 +135,28 @@ export class AnalysisService implements vscode.Disposable {
         return undefined;
       }
       this.latest = result.snapshot;
+      this.stale = this.workspaceGeneration !== generation;
       this.sourceUris.clear();
       for (const [path, uri] of result.scan.uriByPath) {
         this.sourceUris.set(path, uri);
       }
       this.emitter.fire({ type: 'snapshot', snapshot: result.snapshot });
+      if (this.stale) {
+        // A filesystem event during the scan must not be swallowed by refresh
+        // coalescing. Let the completed promise settle before subscribers retry.
+        if (this.refreshTimer) clearTimeout(this.refreshTimer);
+        this.refreshTimer = setTimeout(() => {
+          this.refreshTimer = undefined;
+          if (!this.disposed) this.emitter.fire({ type: 'stale' });
+        }, 800);
+      }
       return result.snapshot;
     } catch (error) {
       if (requestId !== this.requestSequence || this.disposed) {
         return undefined;
       }
       const message = error instanceof Error ? error.message : String(error);
+      this.stale = true;
       this.emitter.fire({ type: 'error', message });
       void vscode.window.showErrorMessage(`Repogram: ${message}`);
       return undefined;
@@ -136,9 +170,6 @@ export class AnalysisService implements vscode.Disposable {
    */
   private affectsAnalysis(uri: vscode.Uri): boolean {
     const configuration = vscode.workspace.getConfiguration('repogram');
-    if (!configuration.get<boolean>('autoRefresh', true)) {
-      return false;
-    }
     if (!vscode.workspace.getWorkspaceFolder(uri)) {
       return false;
     }
@@ -159,21 +190,26 @@ export class AnalysisService implements vscode.Disposable {
       void vscode.window.showWarningMessage('Repogram could not find a source location for this item.');
       return;
     }
-    const uri = this.sourceUris.get(source.file);
+    await this.openPath(source.file, source.line);
+  }
+
+  /** Only indexed paths are accepted; webview messages cannot open arbitrary URIs. */
+  async openPath(path: string, sourceLine = 1): Promise<void> {
+    const uri = this.sourceUris.get(path);
     if (!uri) {
-      void vscode.window.showWarningMessage(`Repogram source is no longer available: ${source.file}`);
+      void vscode.window.showWarningMessage(`Repogram source is no longer available: ${path}`);
       return;
     }
     try {
       const document = await vscode.workspace.openTextDocument(uri);
-      const line = Math.max(0, Math.min(document.lineCount - 1, source.line - 1));
+      const line = Math.max(0, Math.min(document.lineCount - 1, sourceLine - 1));
       const editor = await vscode.window.showTextDocument(document, { preview: true, preserveFocus: false });
       const position = new vscode.Position(line, 0);
       editor.selection = new vscode.Selection(position, position);
       editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      void vscode.window.showErrorMessage(`Repogram could not open ${source.file}: ${message}`);
+      void vscode.window.showErrorMessage(`Repogram could not open ${path}: ${message}`);
     }
   }
 

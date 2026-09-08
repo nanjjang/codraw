@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { isTextAnalysisPath } from './analyzer';
 import { DEFAULT_EXCLUDE, withRequiredExclude } from './glob';
+import { workspacePath } from './workspacePaths';
 import type { AnalysisDiagnostic, WorkspaceFile } from './model';
 
 /**
@@ -72,8 +73,10 @@ export async function scanWorkspace(): Promise<WorkspaceScanResult> {
       if (!folder) {
         continue;
       }
-      const relative = vscode.workspace.asRelativePath(uri, false).replaceAll('\\', '/');
-      const displayPath = multiRoot ? `${folder.name}/${relative}` : relative;
+      const displayPath = workspacePath(uri);
+      if (!displayPath) {
+        continue;
+      }
 
       try {
         const stat = await vscode.workspace.fs.stat(uri);

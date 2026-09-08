@@ -6,6 +6,8 @@ interface RepogramTestApi {
     panelOpen: boolean;
     analysisReady: boolean;
     renderReady: boolean;
+    overviewReady: boolean;
+    gitStatus: string;
     projectName?: string;
     files?: number;
     modules?: number;
@@ -33,6 +35,9 @@ export async function run(): Promise<void> {
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes('repogram.open'), 'repogram.open must be registered.');
   assert.ok(commands.includes('repogram.refresh'), 'repogram.refresh must be registered.');
+  for (const command of ['repogram.showFileImpact', 'repogram.reviewChanges', 'repogram.findRelatedTests', 'repogram.copyChangeReview']) {
+    assert.ok(commands.includes(command), `${command} must be registered.`);
+  }
   assert.ok(
     commands.includes('repogram.exportSchemaDocs'),
     'repogram.exportSchemaDocs must be registered.',
@@ -49,6 +54,7 @@ export async function run(): Promise<void> {
   );
   assert.equal(api.getStatus().panelOpen, false, 'The sidebar must render without opening the diagram panel.');
   assert.equal(api.getStatus().projectName, 'polyglot-workspace');
+  await waitFor(() => api.getStatus().overviewReady, 10000, 'The Work sidebar did not render the snapshot.');
 
   await vscode.commands.executeCommand('repogram.open');
   await waitFor(() => allTabLabels().includes('Repogram'), 5000, 'Repogram webview tab did not open.');
@@ -81,6 +87,10 @@ export async function run(): Promise<void> {
     'module:src%2Fapi',
     'The active file must resolve to the module node id the diagram uses.',
   );
+  await vscode.commands.executeCommand('repogram.showFileImpact', target);
+  await waitFor(() => api.getStatus().overviewReady, 5000, 'File impact did not keep the sidebar ready.');
+  await vscode.commands.executeCommand('repogram.reviewChanges');
+  await waitFor(() => api.getStatus().gitStatus !== 'loading', 10000, 'Git tracking never left its loading state.');
 
   await vscode.commands.executeCommand('repogram.refresh');
   await new Promise((resolve) => setTimeout(resolve, 500));

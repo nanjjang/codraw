@@ -26,7 +26,6 @@ const webviewOptions = {
     'webview-src/main.ts',
     'webview-src/styles.css',
     'webview-src/overview.ts',
-    'webview-src/overview.css',
   ],
   outdir: 'dist/webview',
   format: 'iife',
